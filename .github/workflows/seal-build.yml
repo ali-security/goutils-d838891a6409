@@ -1,0 +1,74 @@
+name: seal-build
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Copy source tree without .git
+        run: |
+          set -euo pipefail
+          SRC="$RUNNER_TEMP/src"
+          mkdir -p "$SRC"
+          git archive --format=tar HEAD | tar -x -C "$SRC"
+          rm -f "$SRC/.github/workflows/seal-build.yml"
+          # The public proxy zip has no .github directory at all.
+          rm -rf "$SRC/.github"
+          ls -la "$SRC"
+
+      - name: Create module zip
+        run: |
+          set -euo pipefail
+          HELPER="$RUNNER_TEMP/helper"
+          mkdir -p "$HELPER" "$RUNNER_TEMP/out"
+          cd "$HELPER"
+          go mod init helper
+          go get golang.org/x/mod@v0.14.0
+          cat > main.go <<'EOF'
+          package main
+
+          import (
+              "log"
+              "os"
+
+              "golang.org/x/mod/module"
+              "golang.org/x/mod/zip"
+          )
+
+          func main() {
+              srcDir := os.Args[1]
+              outPath := os.Args[2]
+              f, err := os.Create(outPath)
+              if err != nil {
+                  log.Fatal(err)
+              }
+              mv := module.Version{Path: "github.com/Masterminds/goutils", Version: "v1.1.0"}
+              if err := zip.CreateFromDir(f, mv, srcDir); err != nil {
+                  f.Close()
+                  log.Fatal(err)
+              }
+              if err := f.Close(); err != nil {
+                  log.Fatal(err)
+              }
+          }
+          EOF
+          go run . "$RUNNER_TEMP/src" "$RUNNER_TEMP/out/v1.1.0.zip"
+          unzip -l "$RUNNER_TEMP/out/v1.1.0.zip"
+
+      - name: Upload module zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: module-zip
+          path: ${{ runner.temp }}/out/v1.1.0.zip
+          if-no-files-found: error
